@@ -1,11 +1,10 @@
 /**
  * RFD Scraper
- * Scrapes RedFlagDeals hot deals forum and returns structured deal objects.
- * Uses axios + cheerio (no headless browser needed — RFD is server-rendered).
+ * Uses Puppeteer (headless Chrome) to bypass Cloudflare and scrape
+ * RedFlagDeals hot deals forum. Caches results for 15 minutes.
  */
 
-const axios = require('axios');
-const axiosRetry = require('axios-retry').default;
+const puppeteer = require('puppeteer');
 const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
@@ -14,26 +13,7 @@ const CACHE_FILE = path.join(__dirname, '../data/cache.json');
 const RFD_URL = 'https://forums.redflagdeals.com/hot-deals-f9/';
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-// Retry on network errors / 5xx
-axiosRetry(axios, {
-  retries: 3,
-  retryDelay: axiosRetry.exponentialDelay,
-  retryCondition: (err) =>
-    axiosRetry.isNetworkOrIdempotentRequestError(err) ||
-    (err.response && err.response.status >= 500),
-});
-
-// Rotate user agents to avoid simple bot detection
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-];
-
-function randomUA() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function detectCategory(text) {
   const t = (text || '').toLowerCase();
@@ -63,34 +43,14 @@ function extractPrices(text) {
   return { currentPrice, wasPrice: wasPrice !== currentPrice ? wasPrice : null, discount };
 }
 
-async function scrapeRFD() {
-  console.log(`[${new Date().toISOString()}] Scraping RFD...`);
-
-  const response = await axios.get(RFD_URL, {
-    timeout: 15000,
-    headers: {
-      'User-Agent': randomUA(),
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-CA,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Referer': 'https://forums.redflagdeals.com/',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-    },
-  });
-
-  const $ = cheerio.load(response.data);
+function parseDeals(html) {
+  const $ = cheerio.load(html);
   const deals = [];
 
-  // RFD forum thread rows
   $('li.row.topic').each((i, el) => {
     try {
       const $el = $(el);
 
-      // Title & URL
       const $titleLink = $el.find('h3.topictitle a, a.topic_title_link').first();
       const title = $titleLink.text().trim();
       if (!title) return;
@@ -99,34 +59,24 @@ async function scrapeRFD() {
       if (url && !url.startsWith('http')) {
         url = 'https://forums.redflagdeals.com' + url;
       }
+      if (!url) return;
 
-      // Store — RFD titles use [Store Name] prefix
       const storeMatch = title.match(/^\[([^\]]+)\]/);
       const store = storeMatch ? storeMatch[1] : 'RedFlagDeals';
       const cleanTitle = title.replace(/^\[[^\]]+\]\s*/, '');
 
-      // Votes / score
       const votesText = $el.find('.total_count, .vote_count, span.count').first().text().trim();
       const votes = parseInt(votesText.replace(/[^-\d]/g, '')) || 0;
 
-      // Replies/comments
       const repliesText = $el.find('.posts, td.posts, .num_replies').first().text().trim();
       const comments = parseInt(repliesText.replace(/\D/g, '')) || 0;
 
-      // Posted date — try data attribute first, then text
       const dateAttr = $el.find('time').attr('datetime') || $el.find('[data-time]').attr('data-time');
-      const dateText = $el.find('.post-time, .topic_date, time').first().text().trim();
-      let time = Date.now() - i * 600000; // fallback: stagger by 10min
+      let time = Date.now() - i * 600000;
       if (dateAttr) {
         const parsed = new Date(isNaN(dateAttr) ? dateAttr : parseInt(dateAttr) * 1000);
         if (!isNaN(parsed.getTime())) time = parsed.getTime();
-      } else if (dateText) {
-        const parsed = new Date(dateText);
-        if (!isNaN(parsed.getTime())) time = parsed.getTime();
       }
-
-      // Category tag from RFD's category column
-      const categoryText = $el.find('.thread_category, .topic_category, .icon_category').text().trim();
 
       const { currentPrice, wasPrice, discount } = extractPrices(title);
 
@@ -136,7 +86,7 @@ async function scrapeRFD() {
         sourceName: 'RedFlagDeals',
         title: cleanTitle,
         store,
-        description: categoryText || '',
+        description: '',
         currentPrice,
         wasPrice,
         discount,
@@ -152,8 +102,63 @@ async function scrapeRFD() {
     }
   });
 
-  console.log(`[${new Date().toISOString()}] Scraped ${deals.length} deals from RFD`);
   return deals;
+}
+
+// ── Puppeteer scraper ─────────────────────────────────────────────────────────
+
+async function scrapeRFD() {
+  console.log(`[${new Date().toISOString()}] Launching Puppeteer...`);
+
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+    ],
+  });
+
+  try {
+    const page = await browser.newPage();
+
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    );
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-CA,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    });
+
+    // Block images/fonts to load faster
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (['image', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    console.log(`[${new Date().toISOString()}] Navigating to RFD...`);
+    await page.goto(RFD_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    await page.waitForSelector('li.row.topic', { timeout: 10000 }).catch(() => {
+      console.warn('Selector li.row.topic not found — Cloudflare may have challenged');
+    });
+
+    const html = await page.content();
+    const deals = parseDeals(html);
+    console.log(`[${new Date().toISOString()}] Scraped ${deals.length} deals`);
+    return deals;
+
+  } finally {
+    await browser.close();
+  }
 }
 
 function readCache() {
