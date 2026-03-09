@@ -790,9 +790,6 @@
       <button class="filter-btn" data-cat="computers">Computers & PC</button>
       <button class="filter-btn" data-cat="gaming">Gaming</button>
       <button class="filter-btn" data-cat="appliances">Appliances</button>
-      <button class="filter-btn" data-cat="clothing">Clothing</button>
-      <button class="filter-btn" data-cat="food">Food & Grocery</button>
-      <button class="filter-btn" data-cat="other">Other</button>
     </div>
     <select class="sort-select" id="sortSelect">
       <option value="time">Sort: Newest</option>
@@ -830,7 +827,7 @@
 </div>
 
 <footer>
-  <span>DealRadar © 2025 — Not affiliated with Reddit</span>
+  <span>DealRadar © 2025 — Not affiliated with Reddit · Developed by James H</span>
   <span>Sources: <a href="https://reddit.com/r/bapcsalescanada" target="_blank">r/bapcsalescanada</a> · <a href="https://reddit.com/r/CanadianDeals" target="_blank">r/CanadianDeals</a></span>
 </footer>
 
@@ -847,11 +844,9 @@ function detectCategory(text) {
   const t = (text || '').toLowerCase();
   if (/\b(gpu|cpu|ssd|nvme|ram|ddr[45]|motherboard|rtx|rx \d|ryzen|intel core|psu|pc build|gaming pc|desktop|case|cooler)\b/.test(t)) return 'computers';
   if (/\b(ps5|xbox|nintendo|switch|controller|game|gaming|steam deck)\b/.test(t)) return 'gaming';
-  if (/\b(laptop|monitor|tablet|phone|iphone|pixel|galaxy|tv|television|headphone|earbud|speaker|camera|drone|router|wifi|keyboard|mouse|smartwatch)\b/.test(t)) return 'electronics';
   if (/\b(washer|dryer|fridge|dishwasher|microwave|oven|vacuum|air fryer|coffee maker|blender|toaster)\b/.test(t)) return 'appliances';
-  if (/\b(shirt|pants|jacket|shoes|boots|coat|hoodie|dress|jeans|sneaker|nike|adidas|lululemon)\b/.test(t)) return 'clothing';
-  if (/\b(food|grocery|snack|drink|coffee|tea|protein|supplement|restaurant)\b/.test(t)) return 'food';
-  return 'other';
+  if (/\b(laptop|monitor|tablet|phone|iphone|pixel|galaxy|tv|television|headphone|earbud|speaker|camera|drone|router|wifi|keyboard|mouse|smartwatch|charger|usb|cable|hard drive|nas|printer|projector)\b/.test(t)) return 'electronics';
+  return null; // null = not electronics-related, will be filtered out
 }
 
 // ─── FETCH REDDIT ─────────────────────────────────────────────────────────────
@@ -874,6 +869,10 @@ async function fetchReddit(subreddit) {
         : (currentPrice && wasPrice && wasPrice > currentPrice) ? Math.round((1 - currentPrice / wasPrice) * 100) : null;
       const storeMatch = d.title.match(/(?:@|at|from)\s+([A-Z][a-zA-Z\s]+?)(?:\s*[-–|]|\s*\[|\s*\$|$)/);
       const store = storeMatch ? storeMatch[1].trim() : (d.domain || subreddit);
+      const category = detectCategory(d.title);
+
+      // Skip non-electronics deals entirely
+      if (!category) return null;
 
       return {
         id: d.id,
@@ -889,9 +888,10 @@ async function fetchReddit(subreddit) {
         comments: d.num_comments,
         url: `https://reddit.com${d.permalink}`,
         time: d.created_utc * 1000,
-        category: detectCategory(d.title)
+        category
       };
-    });
+    })
+    .filter(Boolean); // remove nulls
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
@@ -1064,372 +1064,6 @@ function getTimeAgo(ms) {
 
 function escapeHtml(str) {
   return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-// ─── INIT ─────────────────────────────────────────────────────────────────────
-loadAllDeals();
-</script>
-</body>
-</html>
-
-// ─── CATEGORY DETECTION ──────────────────────────────────────────────────────
-function detectCategory(text) {
-  const t = (text || '').toLowerCase();
-  if (/\b(laptop|desktop|monitor|gpu|cpu|ssd|ram|motherboard|pc|computer|tablet|keyboard|mouse|headphone|earbud|speaker|tv|television|phone|iphone|android|pixel|samsung|lg|sony|dell|hp|lenovo|asus|acer|macbook|ipad|camera|drone|router|wifi|nvme|hard drive|usb|charger|cable)\b/.test(t)) {
-    if (/\b(gpu|cpu|ssd|ram|motherboard|pc build|gaming pc|desktop|rtx|rx \d|ryzen|intel core|ddr[45]|nvme|case|psu|cooler)\b/.test(t)) return 'computers';
-    if (/\b(ps5|xbox|nintendo|switch|controller|game|gaming|steam deck)\b/.test(t)) return 'gaming';
-    return 'electronics';
-  }
-  if (/\b(ps5|xbox|nintendo|switch|controller|game|gaming|steam deck)\b/.test(t)) return 'gaming';
-  if (/\b(washer|dryer|fridge|dishwasher|microwave|oven|vacuum|appliance|air fryer|coffee maker|blender|toaster)\b/.test(t)) return 'appliances';
-  if (/\b(shirt|pants|jacket|shoes|boots|clothing|fashion|apparel|coat|hoodie|dress|jeans|sneaker|nike|adidas|lululemon)\b/.test(t)) return 'clothing';
-  if (/\b(food|grocery|snack|drink|coffee|tea|protein|supplement|costco food|amazon fresh)\b/.test(t)) return 'food';
-  return 'other';
-}
-
-// ─── FETCH REDDIT ─────────────────────────────────────────────────────────────
-async function fetchReddit(subreddit) {
-  const url = `https://www.reddit.com/r/${subreddit}/hot.json?limit=30`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error(`Reddit r/${subreddit}: ${res.status}`);
-  const data = await res.json();
-
-  return data.data.children
-    .filter(p => !p.data.stickied && p.data.score > 5)
-    .map(p => {
-      const d = p.data;
-      // Extract price info from title
-      const priceMatch = d.title.match(/\$\s*([\d,]+(?:\.\d{2})?)/g);
-      const prices = priceMatch ? priceMatch.map(p => parseFloat(p.replace(/[$,\s]/g, ''))) : [];
-      const currentPrice = prices.length > 0 ? Math.min(...prices) : null;
-      const wasPrice = prices.length > 1 ? Math.max(...prices) : null;
-      const discountMatch = d.title.match(/(\d+)%\s*off/i);
-      const discount = discountMatch ? parseInt(discountMatch[1]) : 
-                       (currentPrice && wasPrice ? Math.round((1 - currentPrice/wasPrice)*100) : null);
-
-      // Extract store
-      const storeMatch = d.title.match(/(?:@|at|from)\s+([A-Z][a-zA-Z\s]+?)(?:\s*[-–\|]|\s*\[|\s*\$|$)/);
-      const store = storeMatch ? storeMatch[1].trim() : (d.domain || subreddit);
-
-      return {
-        id: d.id,
-        source: subreddit === 'CanadianDeals' ? 'reddit_canadian' : 'reddit_bapcs',
-        sourceName: subreddit === 'CanadianDeals' ? 'r/CanadianDeals' : 'r/bapcsalescanada',
-        title: d.title,
-        description: d.selftext ? d.selftext.substring(0, 120) + '...' : '',
-        store: store,
-        currentPrice: currentPrice,
-        wasPrice: wasPrice,
-        discount: discount,
-        votes: d.score,
-        comments: d.num_comments,
-        url: `https://reddit.com${d.permalink}`,
-        time: d.created_utc * 1000,
-        category: detectCategory(d.title)
-      };
-    });
-}
-
-// ─── FETCH RFD ────────────────────────────────────────────────────────────────
-// ⚙️  CONFIGURATION: paste your Render URL here after deploying the rfd-api backend
-const RFD_API_URL = ''; // e.g. 'https://rfd-api-xxxx.onrender.com'
-
-async function fetchRFDFromAPI() {
-  if (!RFD_API_URL) throw new Error('RFD_API_URL not configured');
-  const res = await fetch(`${RFD_API_URL}/deals`, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) throw new Error(`RFD API HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data.success || !data.deals?.length) throw new Error('RFD API returned no deals');
-  return { deals: data.deals, source: 'api' };
-}
-
-async function fetchRFDViaClaudeAI() {
-  const prompt = `You are a Canadian deals aggregator. Generate 12 realistic hot deals typical of RedFlagDeals.com forums for ${new Date().toLocaleDateString('en-CA', {month:'long', year:'numeric'})}.
-
-Return ONLY a valid JSON array, no markdown, no explanation. Each object:
-- title: string (deal title without store prefix)
-- store: string (e.g. "Amazon Canada", "Best Buy", "Costco", "Memory Express", "Canada Computers")
-- currentPrice: number (CAD)
-- wasPrice: number or null
-- discount: number (%) or null
-- category: one of ["electronics","computers","gaming","appliances","clothing","food","other"]
-- description: string (1 sentence)
-- searchQuery: string (2-4 word search query for this product e.g. "RTX 4070 Super" or "LG C3 OLED 65")
-
-Lean toward electronics, computers, gaming. Use realistic CAD prices and real brand/model names.`;
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      messages: [{ role: "user", content: prompt }]
-    })
-  });
-  if (!response.ok) throw new Error(`Claude API ${response.status}`);
-  const data = await response.json();
-  const text = data.content.map(b => b.text || '').join('');
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const deals = JSON.parse(cleaned);
-
-  return deals.map((d, i) => ({
-    id: `rfd_ai_${i}_${Date.now()}`,
-    source: 'rfd', sourceName: 'RedFlagDeals',
-    title: d.title,
-    description: d.description || '',
-    store: d.store || 'Various',
-    currentPrice: d.currentPrice || null,
-    wasPrice: d.wasPrice || null,
-    discount: d.discount || null,
-    votes: 0, comments: 0,
-    url: `https://forums.redflagdeals.com/search.php?keywords=${encodeURIComponent(d.searchQuery || d.title.split(' ').slice(0,4).join(' '))}&fid[]=9&sr=topics&sf=titleonly`,
-    time: Date.now() - i * 900000,
-    category: d.category || 'other',
-    isReal: false
-  }));
-}
-
-async function fetchRFDRSS() {
-  // 1. Try your self-hosted API first (real scraped data)
-  try {
-    const result = await fetchRFDFromAPI();
-    console.log('RFD: served from self-hosted API ✅');
-    return result;
-  } catch(e) {
-    console.warn('RFD API unavailable:', e.message, '— falling back to Claude AI');
-  }
-  // 2. Fallback: Claude AI with RFD search links
-  return { deals: await fetchRFDViaClaudeAI(), source: 'ai' };
-}
-
-// ─── RENDER ───────────────────────────────────────────────────────────────────
-function renderDeals() {
-  let deals = [...allDeals];
-
-  // Source filter
-  if (activeSource !== 'all') {
-    deals = deals.filter(d => d.source === activeSource);
-  }
-  // Category filter
-  if (activeCategory !== 'all') {
-    deals = deals.filter(d => d.category === activeCategory);
-  }
-  // Sort
-  deals.sort((a, b) => {
-    if (activeSort === 'time') return b.time - a.time;
-    if (activeSort === 'discount') return (b.discount || 0) - (a.discount || 0);
-    if (activeSort === 'price_asc') return (a.currentPrice || 9999) - (b.currentPrice || 9999);
-    if (activeSort === 'votes') return b.votes - a.votes;
-    return 0;
-  });
-
-  const container = document.getElementById('dealsContainer');
-
-  if (deals.length === 0) {
-    container.innerHTML = `<div class="empty-state"><div class="big">📡</div>No deals found for this filter.</div>`;
-    return;
-  }
-
-  container.innerHTML = `<div class="deals-grid">${deals.map((d, i) => renderCard(d, i)).join('')}</div>`;
-  updateStats(deals);
-  updateTicker(deals.slice(0, 12));
-}
-
-function renderCard(deal, index) {
-  const sourceClass = deal.source === 'rfd' ? 'rfd' : 'reddit';
-  const sourceName = deal.source === 'rfd' ? 'RFD' : deal.sourceName;
-  const priceHtml = deal.currentPrice
-    ? `<span class="price-now">$${deal.currentPrice.toFixed(0)}</span>${deal.wasPrice ? `<span class="price-was">$${deal.wasPrice.toFixed(0)}</span>` : ''}`
-    : '';
-  const discountHtml = deal.discount ? `<span class="discount-pill">-${deal.discount}%</span>` : '';
-  const timeAgo = getTimeAgo(deal.time);
-  const delay = (index % 12) * 40;
-
-  return `
-    <div class="deal-card" style="animation-delay:${delay}ms" onclick="window.open('${deal.url}','_blank')">
-      <div class="card-glow"></div>
-      <div class="card-header">
-        <span class="source-badge ${sourceClass}">${sourceName}</span>
-        <span class="category-tag">${deal.category}</span>
-      </div>
-      <div class="card-body">
-        <div class="deal-title">${escapeHtml(deal.title)}</div>
-        <div class="deal-store">🏪 ${escapeHtml(deal.store)}</div>
-        ${priceHtml || deal.description ? `
-        <div class="deal-prices">
-          ${priceHtml}
-          ${discountHtml}
-        </div>` : ''}
-        ${deal.description ? `<div class="deal-description">${escapeHtml(deal.description)}</div>` : ''}
-      </div>
-      <div class="card-footer">
-        <div class="deal-meta">
-          <span class="up">▲ ${deal.votes}</span>
-          <span>💬 ${deal.comments}</span>
-          <span>🕐 ${timeAgo}</span>
-        </div>
-        <a href="${deal.url}" target="_blank" class="deal-link" onclick="event.stopPropagation()">VIEW →</a>
-      </div>
-    </div>`;
-}
-
-function updateStats(deals) {
-  document.getElementById('statTotal').textContent = deals.length;
-
-  const withDiscount = deals.filter(d => d.discount);
-  const avgDiscount = withDiscount.length
-    ? Math.round(withDiscount.reduce((s, d) => s + d.discount, 0) / withDiscount.length)
-    : 0;
-  document.getElementById('statAvgDiscount').textContent = avgDiscount ? `${avgDiscount}%` : '—';
-
-  const best = [...deals].sort((a, b) => (b.discount || 0) - (a.discount || 0))[0];
-  document.getElementById('statTopSave').textContent = best?.discount ? `${best.discount}%` : '—';
-  document.getElementById('statTopSaveName').textContent = best ? best.store : '—';
-  document.getElementById('statSources').textContent = new Set(deals.map(d => d.source)).size;
-
-  // Tab counts
-  document.getElementById('countAll').textContent = allDeals.length;
-  document.getElementById('countRfd').textContent = allDeals.filter(d => d.source === 'rfd').length;
-  document.getElementById('countCanadian').textContent = allDeals.filter(d => d.source === 'reddit_canadian').length;
-  document.getElementById('countBapcs').textContent = allDeals.filter(d => d.source === 'reddit_bapcs').length;
-}
-
-function updateTicker(deals) {
-  const items = deals.map(d => {
-    const priceStr = d.currentPrice ? ` · <span class="t-price">$${d.currentPrice.toFixed(0)}</span>` : '';
-    const discStr = d.discount ? ` <span class="t-tag">-${d.discount}%</span>` : '';
-    return `<div class="ticker-item">${discStr} ${escapeHtml(d.title.substring(0, 55))}${priceStr} <span class="t-sep">///</span></div>`;
-  });
-  const double = [...items, ...items].join('');
-  document.getElementById('tickerTrack').innerHTML = double;
-}
-
-// ─── THEME TOGGLE ─────────────────────────────────────────────────────────────
-function toggleTheme() {
-  const root = document.documentElement;
-  const isLight = root.classList.toggle('light');
-  document.getElementById('themeIcon').textContent = isLight ? '🌙' : '☀️';
-  localStorage.setItem('dealradar-theme', isLight ? 'light' : 'dark');
-}
-
-// Apply saved theme on load
-(function() {
-  const saved = localStorage.getItem('dealradar-theme');
-  if (saved === 'light') {
-    document.documentElement.classList.add('light');
-    // Icon will be set after DOM loads
-    document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('themeIcon').textContent = '🌙';
-    });
-  }
-})();
-
-// ─── MAIN LOAD ────────────────────────────────────────────────────────────────
-async function loadAllDeals() {
-  if (isLoading) return;
-  isLoading = true;
-
-  const btn = document.getElementById('refreshBtn');
-  const icon = document.getElementById('refreshIcon');
-  btn.disabled = true;
-  icon.innerHTML = '<span class="spin">↻</span>';
-
-  // Show loading skeletons
-  document.getElementById('dealsContainer').innerHTML = `
-    <div class="loading-grid">
-      ${Array(9).fill('<div class="skeleton-card"><div class="skel" style="width:60px;height:16px"></div><div class="skel" style="height:40px;margin-top:12px"></div><div class="skel" style="width:40%;height:28px;margin-top:12px"></div><div class="skel" style="height:32px;margin-top:12px"></div></div>').join('')}
-    </div>`;
-
-  document.getElementById('errorBox').style.display = 'none';
-  allDeals = [];
-
-  const errors = [];
-
-  // Fetch all sources in parallel
-  const [redditCanadian, redditBapcs, rfdDeals] = await Promise.allSettled([
-    fetchReddit('CanadianDeals'),
-    fetchReddit('bapcsalescanada'),
-    fetchRFDRSS()
-  ]);
-
-  if (redditCanadian.status === 'fulfilled') allDeals.push(...redditCanadian.value);
-  else errors.push(`r/CanadianDeals: ${redditCanadian.reason?.message}`);
-
-  if (redditBapcs.status === 'fulfilled') allDeals.push(...redditBapcs.value);
-  else errors.push(`r/bapcsalescanada: ${redditBapcs.reason?.message}`);
-
-  if (rfdDeals.status === 'fulfilled') {
-    const { deals, source } = rfdDeals.value;
-    allDeals.push(...deals);
-    const note = document.getElementById('rfdNote');
-    note.style.display = 'block';
-    if (source === 'api') {
-      note.innerHTML = `<strong>✅ RedFlagDeals:</strong> Live scraped data from your self-hosted RFD API. All links go directly to real forum threads.`;
-      note.style.borderLeftColor = 'var(--green)';
-    } else {
-      note.innerHTML = `<strong>⚠️ RFD API not configured.</strong> Showing AI-suggested deals — links open a real RFD search for each product. <a href="https://github.com" target="_blank" style="color:var(--amber)">Deploy the rfd-api backend</a> and set <code>RFD_API_URL</code> in the frontend to get real deals.`;
-      note.style.borderLeftColor = 'var(--amber)';
-    }
-  } else {
-    errors.push(`RedFlagDeals: ${rfdDeals.reason?.message}`);
-    const note = document.getElementById('rfdNote');
-    note.style.display = 'block';
-    note.innerHTML = `<strong>❌ RedFlagDeals unavailable.</strong> Both the API and AI fallback failed. Reddit deals are still live.`;
-    note.style.borderLeftColor = 'var(--red)';
-  }
-
-  if (errors.length > 0) {
-    document.getElementById('errorBox').style.display = 'block';
-    document.getElementById('errorMsg').textContent = errors.join(' | ');
-  } else {
-    document.getElementById('errorBox').style.display = 'none';
-  }
-
-  document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString('en-CA');
-
-  isLoading = false;
-  btn.disabled = false;
-  icon.textContent = '↺';
-
-  renderDeals();
-}
-
-// ─── EVENT LISTENERS ──────────────────────────────────────────────────────────
-document.getElementById('filterBtns').addEventListener('click', e => {
-  if (!e.target.matches('.filter-btn')) return;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  e.target.classList.add('active');
-  activeCategory = e.target.dataset.cat;
-  renderDeals();
-});
-
-document.querySelectorAll('.source-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    activeSource = tab.dataset.source;
-    renderDeals();
-  });
-});
-
-document.getElementById('sortSelect').addEventListener('change', e => {
-  activeSort = e.target.value;
-  renderDeals();
-});
-
-// ─── UTILS ────────────────────────────────────────────────────────────────────
-function getTimeAgo(ms) {
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs/24)}d ago`;
-}
-
-function escapeHtml(str) {
-  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
